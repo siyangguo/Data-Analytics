@@ -1,0 +1,224 @@
+---
+title: "Spam Filter"
+author: "Siyang Guo"
+output: html_document
+---
+```{r}
+library(ggplot2)
+```
+
+Read Data
+```{r}
+read_directory<-function(dirname){
+  # Store the email in a list
+  emails=list()
+  # Get a list of filenames in the directory
+  filenames=dir(dirname,full.names=TRUE)
+  for (i in 1:length(filenames)){
+    emails[[i]]=scan(filenames[i],what="",quiet=TRUE)
+  }
+  return (emails)
+}
+
+ham_test=read_directory("/Users/siyang/Desktop/Study/Applied Analytics/Machine Learning/Homework/kag-ham-test")
+spam_test=read_directory("/Users/siyang/Desktop/Study/Applied Analytics/Machine Learning/Homework/kag-spam-test")
+ham_train=read_directory("/Users/siyang/Desktop/Study/Applied Analytics/Machine Learning/Homework/kag-ham-train")
+spam_train=read_directory("/Users/siyang/Desktop/Study/Applied Analytics/Machine Learning/Homework/kag-spam-train")
+```
+
+Make dictionary sorted by number of times a word appears in corpus. Use the entire corpus: training, testing, spam and ham.
+```{r}
+make_sorted_dictionary_df<-function(emails){
+  # List of vectors to one big vector
+  dictionary_full=unlist(emails)
+  # Tabulates the full distionary
+  tabulate_dic=tabulate(factor(dictionary_full))
+  # Find unique values
+  dictionary=unique(dictionary_full)
+  
+  dictionary=sort(dictionary)
+  dictionary_df=data.frame(word=dictionary,count=tabulate_dic)
+  sort_dictionary_df=dictionary_df[order(dictionary_df$count,decreasing = TRUE),]
+  
+  return (sort_dictionary_df)
+}
+
+dictionary=make_sorted_dictionary_df(c(ham_test,spam_test,ham_train,spam_train))
+```
+
+Make a document-term matrix, which counts the number of times each dictionary element is used in a document
+```{r}
+make_document_term_matrix<-function(emails,dictionary){
+  num_emails=length(emails)
+  num_words=length(dictionary$word)
+  dtm=mat.or.vec(num_emails,num_words)
+  
+  for (i in 1:num_emails){
+    email_temp=emails[[i]]
+    num_words_emails=length(email_temp)
+    for (j in 1:num_words_emails){
+      ind=which(dictionary$word==email_temp[j])
+      dtm[i,ind]=dtm[i,ind]+1
+    }
+  }
+  return (dtm)
+}
+
+dtm_ham_train=make_document_term_matrix(ham_train,dictionary)
+dtm_ham_test=make_document_term_matrix(ham_test,dictionary)
+dtm_spam_train=make_document_term_matrix(spam_train,dictionary)
+dtm_spam_test=make_document_term_matrix(spam_test,dictionary)
+```
+
+Compute a vector of log probabilities from a document term matrix with mu phantom
+```{r}
+make_log_pvec<-function(dtm,mu){
+  # Sum up the number of instances per word
+  pvec_no_mu=colSums(dtm)
+  # Sum up number of words
+  n_words=sum(pvec_no_mu)
+  # Get dictionary size
+  dic_len=length(pvec_no_mu)
+  # Incorporate mu and normalize
+  log_pvec=log(pvec_no_mu+mu)-log(mu*dic_len+n_words)
+}
+```
+
+Construct Naive Bayes Classifier
+```{r}
+naive_bayes<-function(log_pvec_spam,log_pvec_ham,log_prior_spam,log_prior_ham,dtm_test){
+  classification=c()
+  for (i in 1:nrow(dtm_test)){
+    spam=log_prior_spam
+    ham=log_prior_ham
+    for (j in 1:ncol(dtm_test)){
+      spam=spam+dtm_test[i,j]*log_pvec_spam[j]
+      ham=ham+dtm_test[i,j]*log_pvec_ham[j]
+    }
+    if (spam>ham){classification[[i]]=1}
+    else{classification[[i]]=0}
+  }  
+  return(classification)
+}
+```
+
+The 10 most popular words
+```{r}
+word_10=dictionary$word[1:10]
+print(word_10)
+```
+Counts of top 10 popular words in ham training set
+```{r}
+print(data.frame(word=word_10,count=colSums(dtm_ham_train[,1:10])))
+```
+Counts of top 10 popular words in spam training set
+```{r}
+print(data.frame(word=word_10,count=colSums(dtm_spam_train[,1:10])))
+```
+
+Train on training data and test on testing data
+```{r}
+# Set parameters
+mu=1/length(dictionary$word)
+log_pvec_spam=make_log_pvec(dtm_spam_train,mu)
+log_pvec_ham=make_log_pvec(dtm_ham_train,mu)
+log_prior_spam=log(ncol(dtm_spam_train)/(ncol(dtm_spam_train)+ncol(dtm_ham_train)))
+log_prior_ham=log(ncol(dtm_ham_train)/(ncol(dtm_spam_train)+ncol(dtm_ham_train)))
+# Classify spam testing set
+predict_spam_test=naive_bayes(log_pvec_spam,log_pvec_ham,log_prior_spam,log_prior_ham,dtm_spam_test)
+# Classify ham testing set
+predict_ham_test=naive_bayes(log_pvec_spam,log_pvec_ham,log_prior_spam,log_prior_ham,dtm_ham_test)
+```
+Accurate Rate
+```{r}
+print((sum(predict_spam_test)+length(predict_ham_test)-sum(predict_ham_test))/(length(predict_spam_test)+length(predict_ham_test))*100)
+```
+True Positive
+```{r}
+print(sum(predict_spam_test)/length(predict_spam_test)*100)
+```
+True Negative
+```{r}
+print(1-sum(predict_ham_test)/length(predict_ham_test)*100)
+```
+False Positive
+```{r}
+print(sum(predict_ham_test)/length(predict_ham_test)*100)
+```
+False Negative
+```{r}
+print(1-sum(predict_spam_test)/length(predict_spam_test)*100)
+```
+
+Use 5-fold Cross-Validation
+```{r}
+nb_cv<-function(spam_train,ham_train,spam_test,ham_test,mu){
+  result=c()
+  log_pvec_spam=make_log_pvec(spam_train,mu)
+  log_pvec_ham=make_log_pvec(ham_train,mu)
+  log_prior_spam=log(ncol(spam_train)/(ncol(spam_train)+ncol(ham_train)))
+  log_prior_ham=log(ncol(ham_train)/(ncol(spam_train)+ncol(ham_train)))
+  predict_spam_test=naive_bayes(log_pvec_spam,log_pvec_ham,log_prior_spam,log_prior_ham,spam_test)
+  predict_ham_test=naive_bayes(log_pvec_spam,log_pvec_ham,log_prior_spam,log_prior_ham,ham_test)
+  result[1]=(sum(predict_spam_test)+length(predict_ham_test)-sum(predict_ham_test))/(length(predict_spam_test)+length(predict_ham_test))*100
+  result[2]=1-sum(predict_spam_test)/length(predict_spam_test)*100
+  result[3]=sum(predict_ham_test)/length(predict_ham_test)*100
+  return (result)
+}
+```
+
+```{r}
+cv<-function(total_spam,total_ham,mu){
+  result=list()
+  for (i in 1:5){
+    start=70*i-69
+    end=70*i
+    ind=c(start:end)
+    result[[i]]=nb_cv(total_spam[-ind,],total_ham[-ind,],total_spam[ind,],total_ham[ind,],mu)
+  }
+  return (result)
+}
+```
+
+```{r}
+# Creat three matrics
+accuracy=data.frame(matrix(NA,ncol=5,nrow=5))
+colnames(accuracy)=c("1/100D","1/10D","1/D","10/D","100/D")
+rownames(accuracy)=c("fold_1","fold_2","fold_3","fold_4","fold_5")
+fnr=data.frame(matrix(NA,ncol=5,nrow=5))
+colnames(fnr)=c("1/100D","1/10D","1/D","10/D","100/D")
+rownames(fnr)=c("fold_1","fold_2","fold_3","fold_4","fold_5")
+fpr=data.frame(matrix(NA,ncol=5,nrow=5))
+colnames(fpr)=c("1/100D","1/10D","1/D","10/D","100/D")
+rownames(fpr)=c("fold_1","fold_2","fold_3","fold_4","fold_5")
+# Crear mu vector
+mus=c(1/(100*length(dictionary$word)),1/(10*length(dictionary$word)),1/length(dictionary$word),10/length(dictionary$word),100/length(dictionary$word))
+```
+
+Use 5-fold CV to compare performance of models with different mu value
+```{r}
+for (i in 1:length(mus)){
+  perf=cv(dtm_spam_train,dtm_ham_train,mus[i])
+  for (j in 1:length(perf)){
+    accuracy[j,i]=perf[[j]][1]
+    fnr[j,i]=perf[[j]][2]
+    fpr[j,i]=perf[[j]][3]
+  }
+}
+plot(x=c(-2:2),y=colMeans(accuracy),xlab="power of mu",ylab="Accuracy")
+plot(x=c(-2:2),y=colMeans(fnr),xlab="power of mu",ylab="False Negative Rate")
+plot(x=c(-2:2),y=colMeans(fpr),xlab="power of mu",ylab="False Positive Rate")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
